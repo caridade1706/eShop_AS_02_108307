@@ -2,20 +2,25 @@
   otlp:
     protocols:
       grpc:
+        endpoint: "0.0.0.0:4317"
       http:
+        endpoint: "0.0.0.0:4318"
 
 exporters:
   prometheus:
-    endpoint: "0.0.0.0:9464"
+    endpoint: "0.0.0.0:9464" # Expondo na porta 9464 para Prometheus
 
-  debug: # Substituindo logging por debug
+  debug:
     verbosity: detailed
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [debug]  # Substituindo logging por debug
+      exporters: [debug]
     metrics:
-      receivers: [otlp]
+      receivers: [otlp]  # Recebe as métricas do host
       exporters: [prometheus]
+  telemetry:
+    logs:
+      level: "debug"
