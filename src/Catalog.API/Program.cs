@@ -10,6 +10,10 @@ builder.Services.AddProblemDetails();
 var withApiVersioning = builder.Services.AddApiVersioning();
 builder.AddDefaultOpenApi(withApiVersioning);
 
+// 🔹 Criar um único Meter para toda a API
+var meter = new Meter("Catalog.API");
+builder.Services.AddSingleton(meter); // Registra o Meter no container de serviços
+
 // 🔹 Configuração OpenTelemetry com Prometheus
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
@@ -17,28 +21,27 @@ builder.Services.AddOpenTelemetry()
         metrics
             .AddAspNetCoreInstrumentation()
             .AddHttpClientInstrumentation()
-            .AddMeter("Catalog.API") // Registra o Meter corretamente
+            .AddMeter("Catalog.API") // Certifica-se que o Meter está registrado
             .AddOtlpExporter(Options =>
-            Options.Endpoint = new Uri("http://localhost:4317"));
+                Options.Endpoint = new Uri("http://localhost:4317"));
     });
 
 var app = builder.Build();
 
-// 🔹 Garante que o Prometheus pode coletar as métricas
-app.UseOpenTelemetryPrometheusScrapingEndpoint(); // 🔥 Expor o endpoint de métricas do Prometheus
+var requestCounter = meter.CreateCounter<long>("catalog_requests_total",
+    description: "Número total de requisições ao Catalog.API.");
 
-// 🔹 Criando manualmente um contador
-var meter = new Meter("Catalog.API");
-var requestCounter = meter.CreateCounter<long>("catalog_requests_total", description: "Número total de requisições ao Catalog.API.");
-
-// Middleware para contar requisições
+// 🔹 Middleware para contar todas as requisições à API
 app.Use(async (context, next) =>
 {
-    requestCounter.Add(1, new KeyValuePair<string, object>("method", context.Request.Method));
+    requestCounter.Add(1);
     await next();
 });
 
-// Configuração de rotas e middlewares
+// 🔹 Expor o endpoint de métricas do Prometheus
+app.UseOpenTelemetryPrometheusScrapingEndpoint();
+
+// 🔹 Configuração de rotas e middlewares
 app.MapDefaultEndpoints();
 app.UseStatusCodePages();
 app.MapCatalogApi();
