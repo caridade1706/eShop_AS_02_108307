@@ -1,5 +1,7 @@
-﻿using OpenTelemetry.Metrics;
+﻿using eShop.Basket.API.Repositories;
+using OpenTelemetry.Metrics;
 using System.Diagnostics.Metrics;
+using System.Net.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,7 +12,6 @@ builder.Services.AddGrpc();
 
 var meter = new Meter("Basket.API");
 builder.Services.AddSingleton(meter); // Registra o Meter no container de serviços
-
 
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
@@ -27,6 +28,6 @@ var app = builder.Build();
 
 app.UseOpenTelemetryPrometheusScrapingEndpoint();
 app.MapDefaultEndpoints();
-app.MapGrpcService<BasketService>(); 
+app.MapGrpcService<BasketService>();
 
 app.Run();

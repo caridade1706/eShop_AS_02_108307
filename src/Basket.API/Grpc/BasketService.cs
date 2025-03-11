@@ -20,51 +20,12 @@ public class BasketService(
         () => _cartTotal,
         "Quantidade total de itens no carrinho.");
 
-    private readonly ObservableGauge<double> _viewToCartConversionRateGauge = _meter.CreateObservableGauge("view_to_cart_conversion_rate",
-        () => _lastCalculatedConversionRate, // ✅ Agora lê um valor pré-calculado
-        "Taxa de conversão de visualizações para adição ao carrinho.");
-
     private static long _cartTotal = 0;
     private static long _totalViews = 1; // 🔹 Evita divisão por zero
     private static long _totalAdds = 0;
-    private static double _lastCalculatedConversionRate = 0; // 🔥 Armazena a última taxa calculada
 
-    // 🔹 Executa a atualização de `_totalViews` em segundo plano
-    static BasketService()
-    {
-        Task.Run(async () =>
-        {
-            while (true)
-            {
-                await UpdateTotalViews();
-                _lastCalculatedConversionRate = CalculateConversionRate(); // 🔥 Atualiza a taxa periodicamente
-                await Task.Delay(TimeSpan.FromMinutes(1)); // 🔄 Atualiza a cada 1 minuto
-            }
-        });
-    }
-
-    private static async Task UpdateTotalViews()
-    {
-        using var httpClient = new HttpClient();
-        try
-        {
-            var response = await httpClient.GetStringAsync("http://catalog-api:5000/metrics/views");
-            if (long.TryParse(response, out long views))
-            {
-                _totalViews = views;
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Erro ao buscar visualizações do Catalog.API: {ex.Message}");
-        }
-    }
-
-    private static double CalculateConversionRate()
-    {
-        if (_totalViews == 0) return 0; // ✅ Evita divisão por zero
-        return (_totalAdds / (double)_totalViews) * 100;
-    }
+    // 🔹 Método público para atualizar a taxa de conversão (chamado externamente)
+   
 
     [AllowAnonymous]
     public override async Task<CustomerBasketResponse> GetBasket(GetBasketRequest request, ServerCallContext context)
