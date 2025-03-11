@@ -1,4 +1,6 @@
 ﻿using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using System.Diagnostics.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +18,21 @@ builder.Services.AddSingleton(meter); // Registra o Meter no container de servi�
 
 // 🔹 Configuração OpenTelemetry com Prometheus
 builder.Services.AddOpenTelemetry()
+
+    .WithTracing(tracerProviderBuilder =>
+    {
+        tracerProviderBuilder
+            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("Catalog.API"))
+            .AddAspNetCoreInstrumentation()
+            .AddGrpcClientInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddSource("Catalog.API")
+            .AddOtlpExporter(otlpOptions =>
+            {
+                otlpOptions.Endpoint = new Uri("http://localhost:4317");
+                otlpOptions.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+            });
+    })
     .WithMetrics(metrics =>
     {
         metrics

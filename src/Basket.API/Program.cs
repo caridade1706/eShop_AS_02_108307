@@ -1,7 +1,8 @@
 ﻿using eShop.Basket.API.Repositories;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using System.Diagnostics.Metrics;
-using System.Net.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +15,20 @@ var meter = new Meter("Basket.API");
 builder.Services.AddSingleton(meter); // Registra o Meter no container de serviços
 
 builder.Services.AddOpenTelemetry()
+    .WithTracing(tracerProviderBuilder =>
+    {
+        tracerProviderBuilder
+            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("Basket.API"))
+            .AddAspNetCoreInstrumentation()
+            .AddGrpcClientInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddSource("Basket.API")
+            .AddOtlpExporter(otlpOptions =>
+            {
+                otlpOptions.Endpoint = new Uri("http://localhost:4317");
+                otlpOptions.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+            });
+    })
     .WithMetrics(metrics =>
     {
         metrics

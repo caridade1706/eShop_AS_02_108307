@@ -6,6 +6,7 @@ using System.Diagnostics.Metrics;
 using System.Net.Http;
 using System.Text.Json;
 using Grpc.Core;
+using System.Diagnostics;
 
 namespace eShop.Basket.API.Grpc;
 
@@ -14,6 +15,7 @@ public class BasketService(
     ILogger<BasketService> logger,
     Meter _meter) : Basket.BasketBase
 {
+    private static readonly ActivitySource ActivitySource = new("Basket.API");
     private readonly Counter<long> _addToCartCounter = _meter.CreateCounter<long>("basket_add_to_cart_count", description: "Número total de produtos adicionados ao carrinho.");
     private readonly Counter<long> _removeFromCartCounter = _meter.CreateCounter<long>("basket_remove_from_cart_count", description: "Número total de produtos removidos do carrinho.");
     private readonly ObservableGauge<long> _basketTotalItemsGauge = _meter.CreateObservableGauge("basket_total_items",
@@ -21,7 +23,6 @@ public class BasketService(
         "Quantidade total de itens no carrinho.");
 
     private static long _cartTotal = 0;
-    private static long _totalViews = 1; // 🔹 Evita divisão por zero
     private static long _totalAdds = 0;
 
     // 🔹 Método público para atualizar a taxa de conversão (chamado externamente)
@@ -53,11 +54,14 @@ public class BasketService(
 
     public override async Task<CustomerBasketResponse> UpdateBasket(UpdateBasketRequest request, ServerCallContext context)
     {
+        using var activity = ActivitySource.StartActivity("AddToCart", ActivityKind.Server);
         var userId = context.GetUserIdentity();
         if (string.IsNullOrEmpty(userId))
         {
             ThrowNotAuthenticated();
         }
+
+        activity?.SetTag("user.id", userId);
 
         var existingBasket = await repository.GetBasketAsync(userId);
         var customerBasket = MapToCustomerBasket(userId, request);
@@ -80,10 +84,12 @@ public class BasketService(
             if (difference > 0)
             {
                 itemsAdded += difference;
+                activity?.SetTag($"cart.product_added.{newItem.ProductId}", newItem.Quantity);
             }
             else if (difference < 0)
             {
                 itemsRemoved += Math.Abs(difference);
+                activity?.SetTag($"cart.product_removed.{newItem.ProductId}", Math.Abs(difference));
             }
         }
 
@@ -96,6 +102,7 @@ public class BasketService(
                 if (!stillExists)
                 {
                     itemsRemoved += oldItem.Quantity;
+                    activity?.SetTag($"cart.product_removed.{oldItem.ProductId}", oldItem.Quantity);
                 }
             }
         }

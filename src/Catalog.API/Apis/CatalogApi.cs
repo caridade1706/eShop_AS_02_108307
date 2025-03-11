@@ -5,11 +5,14 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Pgvector.EntityFrameworkCore;
 using System.Diagnostics.Metrics;
+using System.Diagnostics;
 
 namespace eShop.Catalog.API;
 
 public static class CatalogApi
 {
+    private static readonly ActivitySource ActivitySource = new("Catalog.API");
+
     public static IEndpointRouteBuilder MapCatalogApi(this IEndpointRouteBuilder app)
     {
         // RouteGroupBuilder for catalog endpoints
@@ -176,6 +179,18 @@ public static class CatalogApi
     [Description("The catalog item id")] int id,
     [FromServices] Meter meter)
     {
+        using var activity = ActivitySource.StartActivity("ViewProduct", ActivityKind.Server);
+        var userId = httpContext.User.Identity?.IsAuthenticated == true
+        ? httpContext.User.FindFirst("sub")?.Value  // "sub" é o padrão para o ID no JWT
+        ?? httpContext.User.FindFirst("nameid")?.Value  // Alternativa em alguns sistemas
+        ?? httpContext.User.FindFirst("userid")?.Value  // Outra alternativa possível
+        : "anonymous";
+
+        // 🔹 Adiciona informações importantes ao trace
+        activity?.SetTag("product.id", id);
+        activity?.SetTag("user.id", userId);
+        activity?.SetTag("user.ip", httpContext.Connection.RemoteIpAddress?.ToString());
+
         var productViewCounter = meter.CreateCounter<long>("catalog_product_view_count_total",
             description: "Número total de visualizações individuais de produto.");
 
