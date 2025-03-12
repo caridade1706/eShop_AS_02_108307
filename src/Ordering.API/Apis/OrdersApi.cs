@@ -1,9 +1,11 @@
-﻿using Microsoft.AspNetCore.Http.HttpResults;
+﻿using System.Diagnostics;
+using Microsoft.AspNetCore.Http.HttpResults;
 using CardType = eShop.Ordering.API.Application.Queries.CardType;
 using Order = eShop.Ordering.API.Application.Queries.Order;
 
 public static class OrdersApi
 {
+    private static readonly ActivitySource ActivitySource = new("Ordering.API");
     public static RouteGroupBuilder MapOrdersApiV1(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("api/orders").HasApiVersion(1.0);
@@ -120,9 +122,16 @@ public static class OrdersApi
         CreateOrderRequest request,
         [AsParameters] OrderServices services)
     {
-        
+        using var activity = ActivitySource.StartActivity("PlaceOrder", ActivityKind.Server);
+
+        activity?.SetTag("user.id", request.UserId.Substring(0, 4) + "*");
+        activity?.SetTag("request.id", requestId.ToString());
+        activity?.SetTag("order.status", "Processing");
+        activity?.SetTag("order.items_count", request.Items.Count);
+
+
         //mask the credit card number
-        
+
         services.Logger.LogInformation(
             "Sending command: {CommandName} - {IdProperty}: {CommandId}",
             request.GetGenericTypeName(),
@@ -156,10 +165,12 @@ public static class OrdersApi
 
             if (result)
             {
+                activity?.SetTag("order.status", "Completed");
                 services.Logger.LogInformation("CreateOrderCommand succeeded - RequestId: {RequestId}", requestId);
             }
             else
             {
+                activity?.SetTag("order.status", "Failed");
                 services.Logger.LogWarning("CreateOrderCommand failed - RequestId: {RequestId}", requestId);
             }
 

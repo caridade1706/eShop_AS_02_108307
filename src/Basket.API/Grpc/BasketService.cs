@@ -16,6 +16,7 @@ public class BasketService(
     Meter _meter) : Basket.BasketBase
 {
     private static readonly ActivitySource ActivitySource = new("Basket.API");
+
     private readonly Counter<long> _addToCartCounter = _meter.CreateCounter<long>("basket_add_to_cart_count", description: "Número total de produtos adicionados ao carrinho.");
     private readonly Counter<long> _removeFromCartCounter = _meter.CreateCounter<long>("basket_remove_from_cart_count", description: "Número total de produtos removidos do carrinho.");
     private readonly ObservableGauge<long> _basketTotalItemsGauge = _meter.CreateObservableGauge("basket_total_items",
@@ -54,77 +55,99 @@ public class BasketService(
 
     public override async Task<CustomerBasketResponse> UpdateBasket(UpdateBasketRequest request, ServerCallContext context)
     {
+        var addToCartResponseTimeHistogram = _meter.CreateHistogram<double>(
+            "add_to_cart_response_time",
+            unit: "ms",
+            description: "Mede a latência da API ao adicionar um produto ao carrinho.");
+
+        var errorCounter = _meter.CreateCounter<long>(
+            "basket_api_error_count",
+            description: "Número total de erros ocorridos no Basket.API.");
+
+        var stopwatch = Stopwatch.StartNew();
+
         using var activity = ActivitySource.StartActivity("AddToCart", ActivityKind.Server);
         var userId = context.GetUserIdentity();
         if (string.IsNullOrEmpty(userId))
         {
+            errorCounter.Add(1, new KeyValuePair<string, object>("error.type", "Unauthorized"));
             ThrowNotAuthenticated();
         }
 
-        activity?.SetTag("user.id", userId);
+        activity?.SetTag("user.id", userId.Substring(0, 4) + "*");
 
-        var existingBasket = await repository.GetBasketAsync(userId);
-        var customerBasket = MapToCustomerBasket(userId, request);
-        var response = await repository.UpdateBasketAsync(customerBasket);
-        if (response is null)
+        try
         {
-            ThrowBasketDoesNotExist(userId);
-        }
-
-        long itemsAdded = 0;
-        long itemsRemoved = 0;
-
-        // 🔹 Comparação de quantidade para produtos que ainda existem no carrinho
-        foreach (var newItem in request.Items)
-        {
-            var oldItem = existingBasket?.Items.FirstOrDefault(i => i.ProductId == newItem.ProductId);
-            long previousQuantity = oldItem?.Quantity ?? 0;
-            long difference = newItem.Quantity - previousQuantity;
-
-            if (difference > 0)
+            var existingBasket = await repository.GetBasketAsync(userId);
+            var customerBasket = MapToCustomerBasket(userId, request);
+            var response = await repository.UpdateBasketAsync(customerBasket);
+            if (response is null)
             {
-                itemsAdded += difference;
-                activity?.SetTag($"cart.product_added.{newItem.ProductId}", newItem.Quantity);
+                errorCounter.Add(1, new KeyValuePair<string, object>("error.type", "BasketNotFound"));
+                ThrowBasketDoesNotExist(userId);
             }
-            else if (difference < 0)
-            {
-                itemsRemoved += Math.Abs(difference);
-                activity?.SetTag($"cart.product_removed.{newItem.ProductId}", Math.Abs(difference));
-            }
-        }
 
-        // 🔹 Verificar produtos que foram completamente removidos (quantidade foi para zero)
-        if (existingBasket != null)
-        {
-            foreach (var oldItem in existingBasket.Items)
+            long itemsAdded = 0;
+            long itemsRemoved = 0;
+
+            foreach (var newItem in request.Items)
             {
-                bool stillExists = request.Items.Any(i => i.ProductId == oldItem.ProductId);
-                if (!stillExists)
+                var oldItem = existingBasket?.Items.FirstOrDefault(i => i.ProductId == newItem.ProductId);
+                long previousQuantity = oldItem?.Quantity ?? 0;
+                long difference = newItem.Quantity - previousQuantity;
+
+                if (difference > 0)
                 {
-                    itemsRemoved += oldItem.Quantity;
-                    activity?.SetTag($"cart.product_removed.{oldItem.ProductId}", oldItem.Quantity);
+                    itemsAdded += difference;
+                    activity?.SetTag($"cart.product_added.{newItem.ProductId}", newItem.Quantity);
+                }
+                else if (difference < 0)
+                {
+                    itemsRemoved += Math.Abs(difference);
+                    activity?.SetTag($"cart.product_removed.{newItem.ProductId}", Math.Abs(difference));
                 }
             }
-        }
 
-        if (itemsAdded > 0)
+            if (existingBasket != null)
+            {
+                foreach (var oldItem in existingBasket.Items)
+                {
+                    bool stillExists = request.Items.Any(i => i.ProductId == oldItem.ProductId);
+                    if (!stillExists)
+                    {
+                        itemsRemoved += oldItem.Quantity;
+                        activity?.SetTag($"cart.product_removed.{oldItem.ProductId}", oldItem.Quantity);
+                    }
+                }
+            }
+
+            if (itemsAdded > 0)
+            {
+                _addToCartCounter.Add(itemsAdded);
+                _totalAdds += itemsAdded;
+                logger.LogInformation("AddToCartCounter incrementado por {itemsAdded}", itemsAdded);
+            }
+
+            if (itemsRemoved > 0)
+            {
+                _removeFromCartCounter.Add(itemsRemoved);
+                logger.LogInformation("RemoveFromCartCounter incrementado por {itemsRemoved}", itemsRemoved);
+            }
+
+            _cartTotal = response.Items.Sum(i => i.Quantity);
+
+            stopwatch.Stop();
+            addToCartResponseTimeHistogram.Record(stopwatch.ElapsedMilliseconds);
+
+            return MapToCustomerBasketResponse(response);
+        }
+        catch
         {
-            _addToCartCounter.Add(itemsAdded);
-            _totalAdds += itemsAdded;
-            logger.LogInformation("AddToCartCounter incrementado por {itemsAdded}", itemsAdded);
+            errorCounter.Add(1, new KeyValuePair<string, object>("error.type", "ServerError"));
+            throw;
         }
-
-        if (itemsRemoved > 0)
-        {
-            _removeFromCartCounter.Add(itemsRemoved);
-            logger.LogInformation("RemoveFromCartCounter incrementado por {itemsRemoved}", itemsRemoved);
-        }
-
-        // 🔹 Atualiza o total do carrinho
-        _cartTotal = response.Items.Sum(i => i.Quantity);
-
-        return MapToCustomerBasketResponse(response);
     }
+
 
     public override async Task<DeleteBasketResponse> DeleteBasket(DeleteBasketRequest request, ServerCallContext context)
     {

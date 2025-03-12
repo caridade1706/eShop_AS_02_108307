@@ -15,6 +15,7 @@ public static class CatalogApi
 
     public static IEndpointRouteBuilder MapCatalogApi(this IEndpointRouteBuilder app)
     {
+       
         // RouteGroupBuilder for catalog endpoints
         var vApi = app.NewVersionedApi("Catalog");
         var api = vApi.MapGroup("api/catalog").HasApiVersion(1, 0).HasApiVersion(2, 0);
@@ -179,7 +180,14 @@ public static class CatalogApi
     [Description("The catalog item id")] int id,
     [FromServices] Meter meter)
     {
+        var productDetailResponseTimeHistogram = meter.CreateHistogram<double>(
+        "product_detail_response_time",
+        unit: "ms",
+        description: "Mede a latência da API ao buscar detalhes de um produto.");
+
         using var activity = ActivitySource.StartActivity("ViewProduct", ActivityKind.Server);
+        var stopwatch = Stopwatch.StartNew();
+
         var userId = httpContext.User.Identity?.IsAuthenticated == true
         ? httpContext.User.FindFirst("sub")?.Value  // "sub" é o padrão para o ID no JWT
         ?? httpContext.User.FindFirst("nameid")?.Value  // Alternativa em alguns sistemas
@@ -188,8 +196,7 @@ public static class CatalogApi
 
         // 🔹 Adiciona informações importantes ao trace
         activity?.SetTag("product.id", id);
-        activity?.SetTag("user.id", userId);
-        activity?.SetTag("user.ip", httpContext.Connection.RemoteIpAddress?.ToString());
+        activity?.SetTag("user.id", userId.Substring(0, 4) + "*");
 
         var productViewCounter = meter.CreateCounter<long>("catalog_product_view_count_total",
             description: "Número total de visualizações individuais de produto.");
@@ -205,6 +212,9 @@ public static class CatalogApi
         var item = await services.Context.CatalogItems
             .Include(ci => ci.CatalogBrand)
             .SingleOrDefaultAsync(ci => ci.Id == id);
+
+        stopwatch.Stop();
+        productDetailResponseTimeHistogram.Record(stopwatch.ElapsedMilliseconds);
 
         if (item == null)
         {
