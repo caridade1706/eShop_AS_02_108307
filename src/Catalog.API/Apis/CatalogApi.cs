@@ -4,13 +4,18 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Pgvector.EntityFrameworkCore;
+using System.Diagnostics.Metrics;
+using System.Diagnostics;
 
 namespace eShop.Catalog.API;
 
 public static class CatalogApi
 {
+    private static readonly ActivitySource ActivitySource = new("Catalog.API");
+
     public static IEndpointRouteBuilder MapCatalogApi(this IEndpointRouteBuilder app)
     {
+       
         // RouteGroupBuilder for catalog endpoints
         var vApi = app.NewVersionedApi("Catalog");
         var api = vApi.MapGroup("api/catalog").HasApiVersion(1, 0).HasApiVersion(2, 0);
@@ -117,38 +122,39 @@ public static class CatalogApi
         [AsParameters] PaginationRequest paginationRequest,
         [AsParameters] CatalogServices services)
     {
-        return await GetAllItems(paginationRequest, services, null, null, null);
+        return await GetAllItems(paginationRequest, services, null, null, null,null);
     }
 
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest, "application/problem+json")]
     public static async Task<Ok<PaginatedItems<CatalogItem>>> GetAllItems(
-        [AsParameters] PaginationRequest paginationRequest,
-        [AsParameters] CatalogServices services,
-        [Description("The name of the item to return")] string name,
-        [Description("The type of items to return")] int? type,
-        [Description("The brand of items to return")] int? brand)
+    [AsParameters] PaginationRequest paginationRequest,
+    [AsParameters] CatalogServices services,
+    [Description("The name of the item to return")] string name,
+    [Description("The type of items to return")] int? type,
+    [Description("The brand of items to return")] int? brand,
+    [FromServices] Meter meter)
     {
+        var productListCounter = meter.CreateCounter<long>("catalog_product_list_count_total",
+            description: "Número total de requisições para listagem de produtos.");
+        var productFilterCounter = meter.CreateCounter<long>("catalog_product_filter_count_total",
+            description: "Número total de requisições filtradas por tipo e marca.");
+
+        productListCounter.Add(1); // Sempre conta listagem
+
+        if (name is not null || type is not null || brand is not null)
+        {
+            productFilterCounter.Add(1); // Conta apenas se houve filtro
+        }
+
         var pageSize = paginationRequest.PageSize;
         var pageIndex = paginationRequest.PageIndex;
-
         var root = (IQueryable<CatalogItem>)services.Context.CatalogItems;
 
-        if (name is not null)
-        {
-            root = root.Where(c => c.Name.StartsWith(name));
-        }
-        if (type is not null)
-        {
-            root = root.Where(c => c.CatalogTypeId == type);
-        }
-        if (brand is not null)
-        {
-            root = root.Where(c => c.CatalogBrandId == brand);
-        }
+        if (name is not null) root = root.Where(c => c.Name.StartsWith(name));
+        if (type is not null) root = root.Where(c => c.CatalogTypeId == type);
+        if (brand is not null) root = root.Where(c => c.CatalogBrandId == brand);
 
-        var totalItems = await root
-            .LongCountAsync();
-
+        var totalItems = await root.LongCountAsync();
         var itemsOnPage = await root
             .OrderBy(c => c.Name)
             .Skip(pageSize * pageIndex)
@@ -169,34 +175,63 @@ public static class CatalogApi
 
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest, "application/problem+json")]
     public static async Task<Results<Ok<CatalogItem>, NotFound, BadRequest<ProblemDetails>>> GetItemById(
-        HttpContext httpContext,
-        [AsParameters] CatalogServices services,
-        [Description("The catalog item id")] int id)
+    HttpContext httpContext,
+    [AsParameters] CatalogServices services,
+    [Description("The catalog item id")] int id,
+    [FromServices] Meter meter)
     {
+        var productDetailResponseTimeHistogram = meter.CreateHistogram<double>(
+        "product_detail_response_time",
+        unit: "ms",
+        description: "Mede a latência da API ao buscar detalhes de um produto.");
+
+        using var activity = ActivitySource.StartActivity("ViewProduct", ActivityKind.Server);
+        var stopwatch = Stopwatch.StartNew();
+
+        var userId = httpContext.User.Identity?.IsAuthenticated == true
+        ? httpContext.User.FindFirst("sub")?.Value  // "sub" é o padrão para o ID no JWT
+        ?? httpContext.User.FindFirst("nameid")?.Value  // Alternativa em alguns sistemas
+        ?? httpContext.User.FindFirst("userid")?.Value  // Outra alternativa possível
+        : "anonymous";
+
+        // 🔹 Adiciona informações importantes ao trace
+        activity?.SetTag("product.id", id);
+        activity?.SetTag("user.id", userId.Substring(0, 4) + "*");
+
+        var productViewCounter = meter.CreateCounter<long>("catalog_product_view_count_total",
+            description: "Número total de visualizações individuais de produto.");
+
         if (id <= 0)
         {
-            return TypedResults.BadRequest<ProblemDetails>(new (){
+            return TypedResults.BadRequest<ProblemDetails>(new()
+            {
                 Detail = "Id is not valid"
             });
         }
 
-        var item = await services.Context.CatalogItems.Include(ci => ci.CatalogBrand).SingleOrDefaultAsync(ci => ci.Id == id);
+        var item = await services.Context.CatalogItems
+            .Include(ci => ci.CatalogBrand)
+            .SingleOrDefaultAsync(ci => ci.Id == id);
+
+        stopwatch.Stop();
+        productDetailResponseTimeHistogram.Record(stopwatch.ElapsedMilliseconds);
 
         if (item == null)
         {
             return TypedResults.NotFound();
         }
 
+        productViewCounter.Add(1);
+
         return TypedResults.Ok(item);
     }
-
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest, "application/problem+json")]
     public static async Task<Ok<PaginatedItems<CatalogItem>>> GetItemsByName(
         [AsParameters] PaginationRequest paginationRequest,
         [AsParameters] CatalogServices services,
         [Description("The name of the item to return")] string name)
     {
-        return await GetAllItems(paginationRequest, services, name, null, null);
+        return await GetAllItems(paginationRequest, services, name, null, null,null);
     }
 
     [ProducesResponseType<byte[]>(StatusCodes.Status200OK, "application/octet-stream",
@@ -288,7 +323,7 @@ public static class CatalogApi
         [Description("The type of items to return")] int typeId,
         [Description("The brand of items to return")] int? brandId)
     {
-        return await GetAllItems(paginationRequest, services, null, typeId, brandId);
+        return await GetAllItems(paginationRequest, services, null, typeId, brandId,null);
     }
 
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest, "application/problem+json")]
@@ -297,7 +332,7 @@ public static class CatalogApi
         [AsParameters] CatalogServices services,
         [Description("The brand of items to return")] int? brandId)
     {
-        return await GetAllItems(paginationRequest, services, null, null, brandId);
+        return await GetAllItems(paginationRequest, services, null, null, brandId,null);
     }
 
     public static async Task<Results<Created, BadRequest<ProblemDetails>, NotFound<ProblemDetails>>> UpdateItemV1(
