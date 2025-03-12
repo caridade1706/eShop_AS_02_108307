@@ -19,7 +19,7 @@ builder.Services.AddOpenTelemetry()
             .AddAspNetCoreInstrumentation()
             .AddHttpClientInstrumentation()
             .AddGrpcClientInstrumentation()
-            .AddSource("Ordering.API") // Certifica-se de que o trace do Ordering.API está sendo capturado
+            .AddSource("Ordering.API")
             .AddOtlpExporter(otlpOptions =>
             {
                 otlpOptions.Endpoint = new Uri("http://localhost:4317");

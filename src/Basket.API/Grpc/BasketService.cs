@@ -25,8 +25,6 @@ public class BasketService(
 
     private static long _cartTotal = 0;
     private static long _totalAdds = 0;
-
-    // 🔹 Método público para atualizar a taxa de conversão (chamado externamente)
    
 
     [AllowAnonymous]
@@ -162,7 +160,7 @@ public class BasketService(
         {
             long itemsRemoved = existingBasket.Items.Sum(i => i.Quantity);
             _removeFromCartCounter.Add(itemsRemoved);
-            _cartTotal = 0; // 🔥 Zerar o carrinho se ele for deletado
+            _cartTotal = 0;
             logger.LogInformation("Carrinho deletado. RemoveFromCartCounter incrementado por {itemsRemoved}", itemsRemoved);
         }
 
